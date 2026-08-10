@@ -1492,6 +1492,17 @@ const TOPIC_MAP = SEED_CARDS.reduce((acc, c) => {
   return acc;
 }, {});
 
+// Real, data-driven topic lists per SQE module — always in sync with SEED_CARDS,
+// so subject/topic pickers never show a category that doesn't actually exist yet.
+const FLK1_TOPICS = Object.entries(TOPIC_MAP)
+  .filter(([, v]) => v.subject === "FLK1")
+  .map(([topic, v]) => ({ topic, count: v.count }))
+  .sort((a, b) => a.topic.localeCompare(b.topic));
+const FLK2_TOPICS = Object.entries(TOPIC_MAP)
+  .filter(([, v]) => v.subject === "FLK2")
+  .map(([topic, v]) => ({ topic, count: v.count }))
+  .sort((a, b) => a.topic.localeCompare(b.topic));
+
 /* ---------------------------------------------------------
    Spaced repetition (light SM-2)
 --------------------------------------------------------- */
@@ -1742,22 +1753,66 @@ function SbaQuiz({ cards, timed, onFinish }) {
 }
 
 /* ---------------------------------------------------------
+   Subject / topic filter chips — shared by Study and Search
+--------------------------------------------------------- */
+function SubjectTopicFilter({ subject, setSubject, topic, setTopic }) {
+  const topics = subject === "FLK1" ? FLK1_TOPICS : subject === "FLK2" ? FLK2_TOPICS : [];
+  return (
+    <div className="max-w-lg mx-auto px-4 mb-4">
+      <div className="flex gap-1.5 mb-2">
+        {[["All subjects", null], ["FLK1", "FLK1"], ["FLK2", "FLK2"]].map(([label, val]) => {
+          const active = subject === val;
+          return (
+            <button key={label} onClick={() => { setSubject(val); setTopic(null); }}
+              className={`text-[11px] px-2.5 py-1 rounded-sm border transition-colors ${active ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--text-dim)] hover:text-[var(--text-mid)]"}`}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {topics.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={() => setTopic(null)}
+            className={`text-[10px] px-2 py-1 rounded-sm border transition-colors ${!topic ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border-soft)] text-[var(--text-faint)] hover:text-[var(--text-dim)]"}`}>
+            All topics
+          </button>
+          {topics.map(({ topic: t, count }) => (
+            <button key={t} onClick={() => setTopic(t)}
+              className={`text-[10px] px-2 py-1 rounded-sm border transition-colors ${topic === t ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border-soft)] text-[var(--text-faint)] hover:text-[var(--text-dim)]"}`}>
+              {t} · {count}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    Search view
 --------------------------------------------------------- */
-function SearchView({ query, setQuery }) {
+function SearchView({ query, setQuery, subject, setSubject, topic, setTopic }) {
   const results = useMemo(() => {
-    if (!query.trim()) return [];
-    const q = query.toLowerCase();
-    return SEED_CARDS.filter(c =>
-      c.front.toLowerCase().includes(q) ||
-      c.back?.toLowerCase().includes(q) ||
-      c.tags?.some(t => t.toLowerCase().includes(q)) ||
-      c.topic.toLowerCase().includes(q)
-    );
-  }, [query]);
+    const q = query.trim().toLowerCase();
+    return SEED_CARDS.filter(c => {
+      if (subject && c.subject !== subject) return false;
+      if (topic && c.topic !== topic) return false;
+      if (!q) return Boolean(subject || topic); // browsing by subject/topic with no text yet
+      return (
+        c.front.toLowerCase().includes(q) ||
+        c.back?.toLowerCase().includes(q) ||
+        c.explanation?.toLowerCase().includes(q) ||
+        c.tags?.some(t => t.toLowerCase().includes(q)) ||
+        c.topic.toLowerCase().includes(q)
+      );
+    });
+  }, [query, subject, topic]);
+
+  const isBrowsing = Boolean(subject || topic);
 
   return (
     <div className="px-4 max-w-lg mx-auto">
+      <SubjectTopicFilter subject={subject} setSubject={setSubject} topic={topic} setTopic={setTopic} />
       <div className="relative mb-4">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
         <input
@@ -1766,8 +1821,14 @@ function SearchView({ query, setQuery }) {
           className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-sm pl-9 pr-3 py-2.5 text-sm text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)] transition-colors"
         />
       </div>
+      {!query.trim() && !isBrowsing && (
+        <p className="text-sm text-[var(--text-dim)] text-center py-8">Search a case, statute, or concept — or pick a subject above to browse.</p>
+      )}
       {query.trim() && results.length === 0 && (
         <p className="text-sm text-[var(--text-dim)] text-center py-8">No matches for "{query}". Try a case name, statute, or topic.</p>
+      )}
+      {isBrowsing && (
+        <p className="text-[11px] text-[var(--text-dim)] mb-3">{results.length} card{results.length === 1 ? "" : "s"}{topic ? ` in ${topic}` : subject ? ` in ${subject}` : ""}.</p>
       )}
       <div className="flex flex-col gap-3">
         {results.map(c => (
@@ -1788,7 +1849,7 @@ function SearchView({ query, setQuery }) {
 /* ---------------------------------------------------------
    Dashboard
 --------------------------------------------------------- */
-function Dashboard({ progress, streak, goal, setGoal, dueCount, totalCards, onGo }) {
+function Dashboard({ progress, streak, goal, setGoal, dueCount, totalCards, onGo, onSelectTopic }) {
   const knownCount = Object.values(progress).filter(p => p.quality === 1).length;
   const reviewCount = Object.values(progress).filter(p => p.quality === 0).length;
   const pct = totalCards ? Math.round((knownCount / totalCards) * 100) : 0;
@@ -1844,23 +1905,26 @@ function Dashboard({ progress, streak, goal, setGoal, dueCount, totalCards, onGo
       </button>
 
       <div className="border border-[var(--border)] bg-[var(--surface)] rounded-sm p-4">
-        <p className="text-xs uppercase tracking-wide text-[var(--text-dim)] mb-3">Subjects</p>
-        {Object.entries(SUBJECTS).map(([code, list]) => (
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs uppercase tracking-wide text-[var(--text-dim)]">Select a subject to review</p>
+        </div>
+        {[["FLK1", FLK1_TOPICS], ["FLK2", FLK2_TOPICS]].map(([code, topics]) => (
           <div key={code} className="mb-3 last:mb-0">
-            <p className="text-[11px] font-semibold text-[var(--accent)] mb-1.5">{code}</p>
+            <button onClick={() => onSelectTopic(code, null)}
+              className="text-[11px] font-semibold text-[var(--accent)] mb-1.5 hover:underline">
+              {code} — review all
+            </button>
             <div className="flex flex-wrap gap-1.5">
-              {list.map(s => {
-                const has = TOPIC_MAP[s];
-                return (
-                  <span key={s} className={`text-[10px] px-2 py-1 rounded-sm border ${has ? "border-[var(--border)] text-[var(--text-soft)]" : "border-[var(--border-soft)] text-[var(--text-faint)]"}`}>
-                    {s}{has ? ` · ${has.count}` : ""}
-                  </span>
-                );
-              })}
+              {topics.map(({ topic, count }) => (
+                <button key={topic} onClick={() => onSelectTopic(code, topic)}
+                  className="text-[10px] px-2 py-1 rounded-sm border border-[var(--border)] text-[var(--text-soft)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors">
+                  {topic} · {count}
+                </button>
+              ))}
             </div>
           </div>
         ))}
-        <p className="text-[11px] text-[var(--text-dim)] mt-3 leading-relaxed">Contract Law is seeded with {SEED_CARDS.length} cards to test the mechanics. We'll grow this subject-by-subject toward 3,000+.</p>
+        <p className="text-[11px] text-[var(--text-dim)] mt-3 leading-relaxed">{SEED_CARDS.length} cards across {Object.keys(TOPIC_MAP).length} topics. Tap a subject or topic to jump into a focused review session.</p>
       </div>
     </div>
   );
@@ -1883,6 +1947,10 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState("flip"); // flip | sba
   const [timed, setTimed] = useState(false);
+  const [studySubject, setStudySubject] = useState(null); // null | "FLK1" | "FLK2"
+  const [studyTopic, setStudyTopic] = useState(null);
+  const [searchSubject, setSearchSubject] = useState(null);
+  const [searchTopic, setSearchTopic] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [quizResult, setQuizResult] = useState(null);
   const [theme, setTheme] = useState("dark");
@@ -1924,6 +1992,12 @@ export default function App() {
   const flipCards = SEED_CARDS.filter(c => c.type === "flip");
   const sbaCards = SEED_CARDS.filter(c => c.type === "sba");
   const dueFlip = flipCards.filter(c => isDue(progress[c.id]));
+
+  const matchesStudyFilter = (c) =>
+    (!studySubject || c.subject === studySubject) && (!studyTopic || c.topic === studyTopic);
+  const studyFlipCards = flipCards.filter(matchesStudyFilter);
+  const studySbaCards = sbaCards.filter(matchesStudyFilter);
+  const studyDueFlip = studyFlipCards.filter(c => isDue(progress[c.id]));
 
   if (!loaded) {
     return <div className="min-h-screen bg-[var(--bg)] flex items-center justify-center text-[var(--text-dim)] text-sm">Loading your revision data…</div>;
@@ -1969,11 +2043,13 @@ export default function App() {
       <main className="flex-1 py-6 overflow-y-auto pb-24">
         {tab === "dashboard" && (
           <Dashboard progress={progress} streak={streak} goal={goal} setGoal={setGoal}
-            dueCount={dueFlip.length} totalCards={SEED_CARDS.length} onGo={setTab} />
+            dueCount={dueFlip.length} totalCards={SEED_CARDS.length} onGo={setTab}
+            onSelectTopic={(subj, top) => { setStudySubject(subj); setStudyTopic(top); setTab("study"); }} />
         )}
 
         {tab === "study" && (
           <div>
+            <SubjectTopicFilter subject={studySubject} setSubject={setStudySubject} topic={studyTopic} setTopic={setStudyTopic} />
             <div className="flex gap-2 max-w-lg mx-auto px-4 mb-5">
               <button onClick={() => setMode("flip")}
                 className={`flex-1 text-xs py-2 rounded-sm border ${mode === "flip" ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border)] text-[var(--text-dim)]"}`}>
@@ -1985,7 +2061,7 @@ export default function App() {
               </button>
             </div>
 
-            {mode === "flip" && <StudyDeck cards={dueFlip.length ? dueFlip : flipCards} progress={progress} onRate={rate} />}
+            {mode === "flip" && <StudyDeck cards={studyDueFlip.length ? studyDueFlip : studyFlipCards} progress={progress} onRate={rate} />}
 
             {mode === "sba" && !quizResult && (
               <>
@@ -1995,7 +2071,7 @@ export default function App() {
                     Timed practice
                   </label>
                 </div>
-                <SbaQuiz cards={sbaCards} timed={timed}
+                <SbaQuiz cards={studySbaCards} timed={timed}
                   onFinish={(score, total, secs) => setQuizResult({ score, total, secs })} />
               </>
             )}
@@ -2016,7 +2092,11 @@ export default function App() {
           </div>
         )}
 
-        {tab === "search" && <SearchView query={query} setQuery={setQuery} />}
+        {tab === "search" && (
+          <SearchView query={query} setQuery={setQuery}
+            subject={searchSubject} setSubject={setSearchSubject}
+            topic={searchTopic} setTopic={setSearchTopic} />
+        )}
 
         {tab === "more" && (
           <div className="px-4 max-w-lg mx-auto flex flex-col gap-3">
